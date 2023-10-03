@@ -1,19 +1,17 @@
-const express = require('express');
-const { MongoClient, ObjectId } = require('mongodb');
-const dayjs = require('dayjs');
-const joi = require('joi');
-const cors = require('cors');
-const dotenv = require('dotenv');
-//dotenv.config();
-const uri = "mongodb://localhost:27017/chat_zap_db";
+import express from 'express';
+import { MongoClient } from 'mongodb';
+import dayjs from 'dayjs';
+import joi from 'joi';
+import cors from 'cors';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const participantSchena = joi.object({
     name: joi.string().required()
 });
 
 // mongo configuration
-//const mongoClient = new MongoClient(process.env.MONGO_URI);
-const mongoClient = new MongoClient(uri);
+const mongoClient = new MongoClient(process.env.MONGO_URI);
 let db;
 mongoClient.connect(() => {
     db = mongoClient.db("chat_zap_db");
