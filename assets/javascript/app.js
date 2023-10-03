@@ -105,7 +105,7 @@ app.get('/messages', async (req, res) => {
 
 app.post('/messages', async (req, res) => {
     const messageBody = req.body;
-    const messageFrom = req.header.User;
+    const messageFrom = req.headers.user;
 
     const validation = messageSchena.validate(messageBody, { abortEarly: true });
     if (validation.error) {
@@ -116,7 +116,7 @@ app.post('/messages', async (req, res) => {
     try {
         await connectToMongo();
 
-        const existingParticipant = await db.collection('participant').findOne({ name: messageFrom });
+        const existingParticipant = await db.collection('participants').findOne({ name: messageFrom });
 
         if (!existingParticipant) {
             res.sendStatus(422);
@@ -137,7 +137,29 @@ app.post('/messages', async (req, res) => {
 
 //app.delete('/messages', (req, res) => {});
 
-//app.post('/status', (req, res) => {});
+app.post('/status', async (req, res) => {
+    const user = req.headers.user;
+
+    try {
+        await connectToMongo();
+
+        const existingParticipant = await db.collection('participants').findOne({ name: user });
+
+        if (!existingParticipant) {
+            res.sendStatus(404);
+        }
+        else{
+            const statusObject = { lastStatus: Date.now()}
+            await db.collection('participants').updateOne({ 
+                name: user
+            },{ $set: statusObject });
+            res.sendStatus(200);
+        }
+    }  catch (error) {
+        console.error(error);
+        res.sendStatus(500);
+    }
+});
 
 app.listen(PORT, () => {
     console.log('Server is listening on port 5001.');
