@@ -20,7 +20,15 @@ mongoClient.connect(() => {
 const app = express();
 app.use(express.json());
 
-//app.get('/participants', (req, res) => {});
+app.get('/participants', async (req, res) => {
+    try {
+        const participants = await db.collection('participants').find().toArray();
+        res.send(participants);
+    } catch (error) {
+        console.error(error);
+        res.sendStatus(500);
+    }
+});
 
 app.post('/participants', async (req, res) => {
     const participant = req.body;
