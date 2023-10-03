@@ -1,27 +1,42 @@
-import express from 'express';
-import { MongoClient, ObjectId } from 'mongodb';
-import dayjs from 'dayjs'
-import joi from 'joi';
-import dotenv from 'dotenv';
-dotenv.config();
+const express = require('express');
+const { MongoClient, ObjectId } = require('mongodb');
+const dayjs = require('dayjs');
+const joi = require('joi');
+const cors = require('cors');
+const dotenv = require('dotenv');
+//dotenv.config();
+const uri = "mongodb://localhost:27017/chat_zap_db";
 
 const participantSchena = joi.object({
-   name: joi.string().required() 
+    name: joi.string().required()
 });
 
 // mongo configuration
-const mongoClient = new MongoClient(process.env.MONGO_URI);
+//const mongoClient = new MongoClient(process.env.MONGO_URI);
+const mongoClient = new MongoClient(uri);
 let db;
 mongoClient.connect(() => {
     db = mongoClient.db("chat_zap_db");
 });
 
+async function mongoConnection() {
+    try {
+        await mongoClient.connect();
+        console.log('Conexão com o MongoDB estabelecida com sucesso');
+        db = mongoClient.db("chat_zap_db");
+    } catch (error) {
+        console.error('Erro ao conectar ao MongoDB:', error);
+    }
+}
+
 // express configuration
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 app.get('/participants', async (req, res) => {
     try {
+        await mongoConnection();
         const participants = await db.collection('participants').find().toArray();
         res.send(participants);
     } catch (error) {
@@ -32,22 +47,24 @@ app.get('/participants', async (req, res) => {
 
 app.post('/participants', async (req, res) => {
     const participant = req.body;
-    const validation = participantSchena.validate(participant, {abortEarly: true});
-    if(validation.error){
+    const validation = participantSchena.validate(participant, { abortEarly: true });
+    if (validation.error) {
         res.send(422);
         console.log(validation.error.details);
         return;
     }
 
     try {
+        await mongoConnection();
         const existingParticipant = await db.collection('participants').findOne({ _name: req.body.name });
         if(!existingParticipant) {
-            await db.collection('participants').insertOne({...participant, lastStatus: Date.now()});
-            
-            const time = dayjs(Date.now()).format('HH:mm:ss');
-            const message = {from: req.body.name,  to: 'Todos', text: 'entra na sala...', type: 'status', time: time};
-            await db.collection('messages').insertOne(message)
-            res.sendStatus(201);
+        const insertParticipant = { ...participant, lastStatus: Date.now() };
+        await db.collection('participants').insertOne(insertParticipant);
+
+        const time = dayjs(Date.now()).format('HH:mm:ss');
+        const message = {from: req.body.name,  to: 'Todos', text: 'entra na sala...', type: 'status', time: time};
+        await db.collection('messages').insertOne(message);
+        res.sendStatus(201);
         }
         else {
             res.sendStatus(409);
