@@ -1,5 +1,5 @@
 import express from 'express';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import dayjs from 'dayjs';
 import joi from 'joi';
 import cors from 'cors';
@@ -30,16 +30,16 @@ const messageSchena = joi.object({
     type: joi.any().valid('message', 'private_message')
 });
 
-function sanitize(object){
-    for (const key in object){
-        if(object.hasOwnProperty(key)){
+function sanitize(object) {
+    for (const key in object) {
+        if (object.hasOwnProperty(key)) {
             const value = object[key];
-            if(typeof value === 'string') object[key] = stripHtml(value).result.trim();
+            if (typeof value === 'string') object[key] = stripHtml(value).result.trim();
         }
     }
 }
 
-const objeto = { nome:"<div>eri</div><div>ck</div><b>coelho</b>", endereço: "      avenida         ", numero: 18};
+const objeto = { nome: "<div>eri</div><div>ck</div><b>coelho</b>", endereço: "      avenida         ", numero: 18 };
 console.log(objeto);
 sanitize(objeto);
 console.log(objeto);
@@ -116,7 +116,7 @@ app.get('/messages', async (req, res) => {
 
     try {
         await connectToMongo();
-        const messages = await db.collection('messages').find({ to: { $in: [receiverName, 'Todos'] } }).sort( { time: -1 } ).limit(limit).toArray();
+        const messages = await db.collection('messages').find({ to: { $in: [receiverName, 'Todos'] } }).sort({ time: -1 }).limit(limit).toArray();
         res.send(messages.reverse());
     } catch (error) {
         console.error(error);
@@ -155,9 +155,54 @@ app.post('/messages', async (req, res) => {
     }
 });
 
-//app.put('/messages', (req, res) => {});
+app.put('/messages', async (req, res) => {
+    try {
+        await connectToMongo();
 
-//app.delete('/messages', (req, res) => {});
+        const message = await db.collection('messages').find({ _id: new ObjectId(req.params.id) });
+        sanitize(message);
+        if (!message) {
+            res.sendStatus(404);
+        }
+        else {
+            if (message.from !== req.headers.user)
+                res.sendStatus(401);
+            else {
+                const validation = messageSchena.validate(messageBody, { abortEarly: true });
+                if (!validation)
+                    res.sendStatus(404);
+                else {
+                    await db.collection('messages').updateOne({
+                        _id: new ObjectId(req.params.id)
+                    }, { $set: message });
+                }
+            }
+        }
+    } catch (error) {
+        console.error(error);
+        res.sendStatus(500);
+    }
+});
+
+app.delete('/messages', async (req, res) => {
+    try {
+        await connectToMongo();
+
+        const message = await db.collection('messages').find({ _id: new ObjectId(req.params.id) });
+        if (!message) {
+            res.sendStatus(404);
+        }
+        else {
+            if (message.from !== req.headers.user)
+                res.sendStatus(401);
+            else
+                await db.collection('messages').delete({ _id: new ObjectId(req.params.id) });
+        }
+    } catch (error) {
+        console.error(error);
+        res.sendStatus(500);
+    }
+});
 
 app.post('/status', async (req, res) => {
     const user = req.headers.user;
@@ -170,14 +215,14 @@ app.post('/status', async (req, res) => {
         if (!existingParticipant) {
             res.sendStatus(404);
         }
-        else{
-            const statusObject = { lastStatus: Date.now()}
-            await db.collection('participants').updateOne({ 
+        else {
+            const statusObject = { lastStatus: Date.now() }
+            await db.collection('participants').updateOne({
                 name: user
-            },{ $set: statusObject });
+            }, { $set: statusObject });
             res.sendStatus(200);
         }
-    }  catch (error) {
+    } catch (error) {
         console.error(error);
         res.sendStatus(500);
     }
@@ -193,9 +238,9 @@ async function disconnectParticipant() {
         const nowTime = dayjs(Date.now()).format('HH:mm:ss');
 
         const participants = await db.collection('participants').find({ lastStatus: { $lt: limitTime } })/*.sort( { lastStatus: -1 } )*/.toArray();
-        participants.map( async (participant) => {
+        participants.map(async (participant) => {
             try {
-                const message = {from: participant.name, to: 'Todos', text: 'sai da sala...', type: 'status', time: nowTime};
+                const message = { from: participant.name, to: 'Todos', text: 'sai da sala...', type: 'status', time: nowTime };
                 sanitize(message);
                 await db.collection('messages').insertOne(message);
             } catch (error) {
