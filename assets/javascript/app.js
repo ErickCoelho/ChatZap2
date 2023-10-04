@@ -3,6 +3,7 @@ import { MongoClient } from 'mongodb';
 import dayjs from 'dayjs';
 import joi from 'joi';
 import cors from 'cors';
+import { stripHtml } from "string-strip-html";
 import dotenv from 'dotenv';
 
 
@@ -28,6 +29,21 @@ const messageSchena = joi.object({
     text: joi.string().required(),
     type: joi.any().valid('message', 'private_message')
 });
+
+function sanitize(object){
+    for (const key in object){
+        if(object.hasOwnProperty(key)){
+            const value = object[key];
+            if(typeof value === 'string') object[key] = stripHtml(value).result.trim();
+        }
+    }
+}
+
+const objeto = { nome:"<div>eri</div><div>ck</div><b>coelho</b>", endereço: "      avenida         ", numero: 18};
+console.log(objeto);
+sanitize(objeto);
+console.log(objeto);
+
 
 // mongo configuration
 
@@ -73,10 +89,12 @@ app.post('/participants', async (req, res) => {
 
         if (!existingParticipant) {
             const insertParticipant = { ...participant, lastStatus: Date.now() };
+            sanitize(insertParticipant);
             await db.collection('participants').insertOne(insertParticipant);
 
             const time = dayjs(Date.now()).format('HH:mm:ss');
             const message = { from: req.body.name, to: 'Todos', text: 'entra na sala...', type: 'status', time: time };
+            sanitize(message);
             await db.collection('messages').insertOne(message);
             res.sendStatus(201);
         }
@@ -94,10 +112,11 @@ app.post('/participants', async (req, res) => {
 
 app.get('/messages', async (req, res) => {
     const limit = parseInt(req.params.limit) || 100;
+    const receiverName = req.headers.user;
 
     try {
         await connectToMongo();
-        const messages = await db.collection('messages').find().sort( { time: -1 } ).limit(limit).toArray();
+        const messages = await db.collection('messages').find({ to: { $in: [receiverName, 'Todos'] } }).sort( { time: -1 } ).limit(limit).toArray();
         res.send(messages.reverse());
     } catch (error) {
         console.error(error);
@@ -126,6 +145,7 @@ app.post('/messages', async (req, res) => {
         else {
             const time = dayjs(Date.now()).format('HH:mm:ss');
             const message = { ...messageBody, from: messageFrom, time: time };
+            sanitize(message);
             await db.collection('messages').insertOne(message);
             res.sendStatus(201);
         }
@@ -162,6 +182,37 @@ app.post('/status', async (req, res) => {
         res.sendStatus(500);
     }
 });
+
+
+//remover participantes
+async function disconnectParticipant() {
+    try {
+        await connectToMongo();
+
+        const limitTime = Date.now() - 10000;
+        const nowTime = dayjs(Date.now()).format('HH:mm:ss');
+
+        const participants = await db.collection('participants').find({ lastStatus: { $lt: limitTime } })/*.sort( { lastStatus: -1 } )*/.toArray();
+        participants.map( async (participant) => {
+            try {
+                const message = {from: participant.name, to: 'Todos', text: 'sai da sala...', type: 'status', time: nowTime};
+                sanitize(message);
+                await db.collection('messages').insertOne(message);
+            } catch (error) {
+                console.error(error);
+                res.sendStatus(500);
+            }
+        });
+
+        await db.collection('participants').deleteMany({ lastStatus: { $lt: limitTime } });
+    } catch (error) {
+
+    }
+}
+
+setInterval(disconnectParticipant, 15000);
+
+
 
 app.listen(PORT, () => {
     console.log('Server is listening on port 5001.');
