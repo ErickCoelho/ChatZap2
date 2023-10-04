@@ -39,11 +39,6 @@ function sanitize(object) {
     }
 }
 
-const objeto = { nome: "<div>eri</div><div>ck</div><b>coelho</b>", endereço: "      avenida         ", numero: 18 };
-console.log(objeto);
-sanitize(objeto);
-console.log(objeto);
-
 
 // mongo configuration
 
@@ -155,11 +150,12 @@ app.post('/messages', async (req, res) => {
     }
 });
 
-app.put('/messages', async (req, res) => {
+app.put('/messages/:id', async (req, res) => {
+    const { id } = req.params;
     try {
         await connectToMongo();
 
-        const message = await db.collection('messages').find({ _id: new ObjectId(req.params.id) });
+        const message = await db.collection('messages').findOne({ _id: new ObjectId(id) });
         sanitize(message);
         if (!message) {
             res.sendStatus(404);
@@ -168,12 +164,13 @@ app.put('/messages', async (req, res) => {
             if (message.from !== req.headers.user)
                 res.sendStatus(401);
             else {
-                const validation = messageSchena.validate(messageBody, { abortEarly: true });
+                const validation = messageSchena.validate(message, { abortEarly: true });
                 if (!validation)
                     res.sendStatus(404);
                 else {
+                    console.log("put");
                     await db.collection('messages').updateOne({
-                        _id: new ObjectId(req.params.id)
+                        _id: new ObjectId(id)
                     }, { $set: message });
                 }
             }
@@ -184,19 +181,24 @@ app.put('/messages', async (req, res) => {
     }
 });
 
-app.delete('/messages', async (req, res) => {
+app.delete('/messages/:id', async (req, res) => {
+    const { id } = req.params;
+
     try {
         await connectToMongo();
 
-        const message = await db.collection('messages').find({ _id: new ObjectId(req.params.id) });
+        const message = await db.collection('messages').findOne({ _id: new ObjectId(id) });
+
         if (!message) {
             res.sendStatus(404);
         }
         else {
             if (message.from !== req.headers.user)
                 res.sendStatus(401);
-            else
-                await db.collection('messages').delete({ _id: new ObjectId(req.params.id) });
+            else{
+                console.log("delete");
+                await db.collection('messages').deleteOne({ _id: new ObjectId(id) });
+            }
         }
     } catch (error) {
         console.error(error);
