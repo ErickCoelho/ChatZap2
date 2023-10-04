@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { json } from 'express';
 import { MongoClient, ObjectId } from 'mongodb';
 import dayjs from 'dayjs';
 import joi from 'joi';
@@ -7,11 +7,9 @@ import { stripHtml } from "string-strip-html";
 import dotenv from 'dotenv';
 
 
-// express configuration
-
 dotenv.config();
 const app = express();
-app.use(express.json());
+app.use(json());
 app.use(cors());
 
 
@@ -27,7 +25,7 @@ const participantSchena = joi.object({
 const messageSchena = joi.object({
     to: joi.string().required(),
     text: joi.string().required(),
-    type: joi.any().valid('message', 'private_message')
+    type: joi.string().valid('message', 'private_message')
 });
 
 function sanitize(object) {
@@ -40,28 +38,29 @@ function sanitize(object) {
 }
 
 
-// mongo configuration
-
 let db;
+let participantsCollection;
+let messagesCollection;
+const mongoClient = new MongoClient(MONGO_URI);
 
 async function connectToMongo() {
     try {
-        const mongoClient = new MongoClient(MONGO_URI);
         await mongoClient.connect();
         console.log('Conexão com o MongoDB estabelecida com sucesso');
         db = mongoClient.db(DB_NAME);
+        participantsCollection = db.collection('participants');
+        messagesCollection = db.collection('messages');
     } catch (error) {
         console.error('Erro ao conectar ao MongoDB:', error);
     }
 }
 
 
-//participants
-
 app.get('/participants', async (req, res) => {
     try {
         await connectToMongo();
-        const participants = await db.collection('participants').find().toArray();
+        const participants = await participantsCollection.find().toArray();
+        await mongoClient.close();
         res.send(participants);
     } catch (error) {
         console.error(error);
@@ -80,39 +79,47 @@ app.post('/participants', async (req, res) => {
 
     try {
         await connectToMongo();
-        const existingParticipant = await db.collection('participants').findOne({ name: req.body.name });
 
-        if (!existingParticipant) {
-            const insertParticipant = { ...participant, lastStatus: Date.now() };
-            sanitize(insertParticipant);
-            await db.collection('participants').insertOne(insertParticipant);
+        const existingParticipant = await participantsCollection.findOne({ name: req.body.name });
 
-            const time = dayjs(Date.now()).format('HH:mm:ss');
-            const message = { from: req.body.name, to: 'Todos', text: 'entra na sala...', type: 'status', time: time };
-            sanitize(message);
-            await db.collection('messages').insertOne(message);
-            res.sendStatus(201);
-        }
-        else {
+        if (existingParticipant) {
             res.sendStatus(409);
         }
+
+        const insertParticipant = { ...participant, lastStatus: Date.now() };
+        sanitize(insertParticipant);
+        await participantsCollection.insertOne(insertParticipant);
+
+        const message = {
+            from: req.body.name,
+            to: 'Todos',
+            text: 'entra na sala...',
+            type: 'status',
+            time: dayjs(Date.now()).format('HH:mm:ss')
+        };
+        sanitize(message);
+        await messagesCollection.insertOne(message);
+
+        await mongoClient.close();
+        res.sendStatus(201);
+
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
     }
 });
 
-
-//messages
-
 app.get('/messages', async (req, res) => {
     const limit = parseInt(req.params.limit) || 100;
-    const receiverName = req.headers.user;
+    const participant = req.headers.user;
 
     try {
         await connectToMongo();
-        const messages = await db.collection('messages').find({ to: { $in: [receiverName, 'Todos'] } }).sort({ time: -1 }).limit(limit).toArray();
+        const messages = await messagesCollection.find({ to: { $in: [participant, 'Todos'] } }).sort({ time: -1 }).limit(limit).toArray();
+
+        await mongoClient.close();
         res.send(messages.reverse());
+
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
@@ -121,29 +128,31 @@ app.get('/messages', async (req, res) => {
 
 app.post('/messages', async (req, res) => {
     const messageBody = req.body;
-    const messageFrom = req.headers.user;
+    const from = req.headers.user;
 
     const validation = messageSchena.validate(messageBody, { abortEarly: true });
-    if (validation.error) {
-        res.status(422).send(validation.error.details);
-        return;
-    }
+    if (validation.error)
+        return res.status(422).send(validation.error.details);
 
     try {
         await connectToMongo();
 
-        const existingParticipant = await db.collection('participants').findOne({ name: messageFrom });
+        const existingParticipant = await participantsCollection.findOne({ name: from });
 
-        if (!existingParticipant) {
-            res.sendStatus(422);
-        }
-        else {
-            const time = dayjs(Date.now()).format('HH:mm:ss');
-            const message = { ...messageBody, from: messageFrom, time: time };
-            sanitize(message);
-            await db.collection('messages').insertOne(message);
-            res.sendStatus(201);
-        }
+        if (!existingParticipant)
+            return res.sendStatus(422);
+
+        const message = { 
+            ...messageBody, 
+            from: from, 
+            time: dayjs(Date.now()).format('HH:mm:ss') 
+        };
+        sanitize(message);
+        await messagesCollection.insertOne(message);
+
+        await mongoClient.close();
+        res.sendStatus(201);
+
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
@@ -152,29 +161,33 @@ app.post('/messages', async (req, res) => {
 
 app.put('/messages/:id', async (req, res) => {
     const { id } = req.params;
+    const message = req.body;
+    const from = req.headers.user;
+
+    const validation = messageSchena.validate(message, { abortEarly: true });
+    if (!validation)
+        return res.sendStatus(422);
+
     try {
         await connectToMongo();
 
-        const message = await db.collection('messages').findOne({ _id: new ObjectId(id) });
+        const existingMessage = await messagesCollection.findOne({ _id: new ObjectId(id) });
+        if (!existingMessage)
+            return res.sendStatus(404);
+
+        if (existingMessage.from !== from)
+            return res.sendStatus(401);
+
         sanitize(message);
-        if (!message) {
-            res.sendStatus(404);
-        }
-        else {
-            if (message.from !== req.headers.user)
-                res.sendStatus(401);
-            else {
-                const validation = messageSchena.validate(message, { abortEarly: true });
-                if (!validation)
-                    res.sendStatus(404);
-                else {
-                    console.log("put");
-                    await db.collection('messages').updateOne({
-                        _id: new ObjectId(id)
-                    }, { $set: message });
-                }
-            }
-        }
+        await messagesCollection.updateOne({
+            _id: new ObjectId(id)
+        }, {
+            $set: message
+        });
+
+        await mongoClient.close();
+        res.sendStatus(201);
+
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
@@ -183,23 +196,26 @@ app.put('/messages/:id', async (req, res) => {
 
 app.delete('/messages/:id', async (req, res) => {
     const { id } = req.params;
+    const participant = req.headers.user;
 
     try {
         await connectToMongo();
 
-        const message = await db.collection('messages').findOne({ _id: new ObjectId(id) });
+        const existingMessage = await messagesCollection.findOne({ _id: new ObjectId(id) });
 
-        if (!message) {
-            res.sendStatus(404);
-        }
-        else {
-            if (message.from !== req.headers.user)
-                res.sendStatus(401);
-            else{
-                console.log("delete");
-                await db.collection('messages').deleteOne({ _id: new ObjectId(id) });
-            }
-        }
+        if (!existingMessage)
+            return res.sendStatus(404);
+
+        if (existingMessage.from !== participant)
+            return res.sendStatus(401);
+
+        await messagesCollection.deleteOne({
+            _id: existingMessage._id
+        });
+
+        await mongoClient.close();
+        res.sendStatus(200);
+
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
@@ -212,18 +228,20 @@ app.post('/status', async (req, res) => {
     try {
         await connectToMongo();
 
-        const existingParticipant = await db.collection('participants').findOne({ name: user });
+        const existingParticipant = await participantsCollection.findOne({ name: user });
 
-        if (!existingParticipant) {
-            res.sendStatus(404);
-        }
-        else {
-            const statusObject = { lastStatus: Date.now() }
-            await db.collection('participants').updateOne({
-                name: user
-            }, { $set: statusObject });
-            res.sendStatus(200);
-        }
+        if (!existingParticipant)
+            return res.sendStatus(404);
+
+        await participantsCollection.updateOne({
+            _id: existingParticipant._id
+        }, {
+            $set: { lastStatus: Date.now() }
+        });
+
+        await mongoClient.close();
+        res.sendStatus(200);
+
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
@@ -239,21 +257,26 @@ async function disconnectParticipant() {
         const limitTime = Date.now() - 10000;
         const nowTime = dayjs(Date.now()).format('HH:mm:ss');
 
-        const participants = await db.collection('participants').find({ lastStatus: { $lt: limitTime } })/*.sort( { lastStatus: -1 } )*/.toArray();
+        const participants = await participantsCollection.find({ lastStatus: { $lt: limitTime } })/*.sort( { lastStatus: -1 } )*/.toArray();
+        if (!participants) {
+            await mongoClient.close();
+            return;
+        }
+
         participants.map(async (participant) => {
             try {
                 const message = { from: participant.name, to: 'Todos', text: 'sai da sala...', type: 'status', time: nowTime };
                 sanitize(message);
-                await db.collection('messages').insertOne(message);
+                await messagesCollection.insertOne(message);
             } catch (error) {
                 console.error(error);
                 res.sendStatus(500);
             }
         });
 
-        await db.collection('participants').deleteMany({ lastStatus: { $lt: limitTime } });
+        await participantsCollection.deleteMany({ lastStatus: { $lt: limitTime } });
     } catch (error) {
-
+        console.log(error);
     }
 }
 
