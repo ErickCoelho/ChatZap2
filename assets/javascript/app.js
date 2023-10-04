@@ -93,10 +93,12 @@ app.post('/participants', async (req, res) => {
 //messages
 
 app.get('/messages', async (req, res) => {
+    const limit = parseInt(req.params.limit) || 100;
+
     try {
         await connectToMongo();
-        const messages = await db.collection('messages').find().toArray();
-        res.send(messages);
+        const messages = await db.collection('messages').find().sort( { time: -1 } ).limit(limit).toArray();
+        res.send(messages.reverse());
     } catch (error) {
         console.error(error);
         res.sendStatus(500);
